@@ -4,11 +4,12 @@ This document explains the relationship between LangChain and LangGraph, and whe
 
 ## The Key Insight
 
-**LangChain** = Building blocks + simple chains  
+**LangChain** = Building blocks + simple chains + RAG capabilities  
 **LangGraph** = Stateful workflows with loops and branching (built ON TOP of LangChain)  
-**Prebuilt Agents** = LangGraph features with simple LangChain-like API
+**Prebuilt Agents** = LangGraph features with simple LangChain-like API  
+**RAG (Retrieval-Augmented Generation)** = Enhanced agents with document knowledge
 
-You can use tools with LangChain alone! But LangGraph (or prebuilt agents) give you more power.
+You can use tools with LangChain alone! But LangGraph (or prebuilt agents) give you more power. And RAG gives you access to private knowledge.
 
 ---
 
@@ -533,6 +534,25 @@ result = agent.invoke(None, config)  # Continues from checkpoint
 
 **Bottom line**: 
 - Start with `from langchain.agents import create_agent` - simplest API, built on LangGraph
+- Add RAG capabilities with LangChain's document loaders and vector stores
 - Use `create_react_agent` when you need explicit memory/checkpointer control
 - Build custom StateGraph only for complex multi-agent workflows
 - Manual loops are mainly for learning how it works under the hood
+
+## RAG (Retrieval-Augmented Generation)
+
+RAG enhances your agents with the ability to access and reason over private documents. The examples show three approaches:
+
+1. **Basic RAG** (`rag_with_langchain.py`) - Core RAG concepts and simple integration
+2. **Production RAG** (`rag_enhanced_server.py`) - Full server with document management
+3. **Client Integration** (`rag_client_demo.py`) - How to use RAG APIs
+
+Key RAG components:
+- **Document Loaders**: Load PDFs, text files, web pages
+- **Text Splitters**: Break documents into searchable chunks  
+- **Embeddings**: Convert text to vectors for semantic search
+- **Vector Stores**: Store and search embeddings (FAISS, Chroma)
+- **Retrievers**: Find relevant document chunks
+- **RAG Tools**: Integration with agent workflow
+
+See [RAG_INTEGRATION.md](./RAG_INTEGRATION.md) for detailed implementation guide.
