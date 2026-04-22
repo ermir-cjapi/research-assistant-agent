@@ -18,6 +18,53 @@ function ToolCallBadge({ toolCall }: { toolCall: ToolCall }) {
   );
 }
 
+function SourceBadge({ source }: { source: string }) {
+  const getSourceIcon = (source: string) => {
+    if (source.includes('Knowledge Base')) {
+      return (
+        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+        </svg>
+      );
+    } else if (source.includes('Wikipedia')) {
+      return (
+        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9v-9m0-9v9m0 9c-5 0-9-4-9-9s4-9 9-9" />
+        </svg>
+      );
+    } else if (source.includes('Calculator')) {
+      return (
+        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+        </svg>
+      );
+    }
+    return (
+      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+    );
+  };
+
+  const getSourceColor = (source: string) => {
+    if (source.includes('Knowledge Base')) {
+      return 'bg-green-500/20 text-green-300 border-green-500/30';
+    } else if (source.includes('Wikipedia')) {
+      return 'bg-blue-500/20 text-blue-300 border-blue-500/30';
+    } else if (source.includes('Calculator')) {
+      return 'bg-orange-500/20 text-orange-300 border-orange-500/30';
+    }
+    return 'bg-gray-500/20 text-gray-300 border-gray-500/30';
+  };
+
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-full border ${getSourceColor(source)}`}>
+      {getSourceIcon(source)}
+      {source}
+    </span>
+  );
+}
+
 export default function ChatMessage({ message }: ChatMessageProps) {
   const isUser = message.role === 'user';
   
@@ -40,6 +87,19 @@ export default function ChatMessage({ message }: ChatMessageProps) {
           <p className="whitespace-pre-wrap text-sm leading-relaxed">{message.content}</p>
         </div>
         
+        {/* Sources Used (for RAG responses) */}
+        {message.sources_used && message.sources_used.length > 0 && (
+          <div className="mt-3 pt-3 border-t border-gray-600">
+            <div className="text-xs text-gray-400 mb-2">Sources used:</div>
+            <div className="flex flex-wrap gap-1">
+              {message.sources_used.map((source, idx) => (
+                <SourceBadge key={idx} source={source} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Tool Calls (for basic mode) */}
         {message.tool_calls && message.tool_calls.length > 0 && (
           <div className="flex flex-wrap gap-1 mt-2">
             {message.tool_calls.map((tc, idx) => (

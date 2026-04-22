@@ -1,244 +1,205 @@
 """
-LangGraph Research Assistant Agent.
+Research Assistant Agent
 
-This module implements a stateful agent using LangGraph that can:
-- Search Wikipedia for information
-- Remember conversation context across multiple turns
-- Answer multi-step questions by chaining tool calls
-
-LangSmith Integration:
-- Set LANGSMITH_TRACING=true in .env for automatic tracing
-- All LLM calls and tool invocations are traced
-- View traces at https://smith.langchain.com
+This module contains the LangGraph agent implementation.
+It orchestrates the conversation flow using tools and maintains state.
 """
-from typing import TypedDict, Annotated, Literal
-import operator
-import uuid
 import os
+from typing import List, Dict, Any, TypedDict, Annotated
+import operator
 
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.memory import MemorySaver
 
-# Optional: LangSmith traceable decorator for custom trace names
-try:
-    from langsmith import traceable
-    LANGSMITH_AVAILABLE = True
-except ImportError:
-    LANGSMITH_AVAILABLE = False
-    def traceable(*args, **kwargs):
-        def decorator(func):
-            return func
-        return decorator
-
-from tools import ALL_TOOLS
-
-# Log LangSmith status on import
-_langsmith_enabled = os.getenv("LANGSMITH_TRACING", "").lower() == "true"
-if _langsmith_enabled:
-    print(f"[LangSmith] Tracing enabled (project: {os.getenv('LANGSMITH_PROJECT', 'default')})")
-else:
-    print("[LangSmith] Tracing disabled (set LANGSMITH_TRACING=true to enable)")
-
-
-SYSTEM_PROMPT = """You are a helpful research assistant with access to Wikipedia and other tools.
-
-Your capabilities:
-1. Search Wikipedia for factual information about any topic
-2. Get detailed Wikipedia page content when needed
-3. Perform mathematical calculations
-4. Get current date and time
-5. Count words in text
-
-Guidelines:
-- Use the search_wikipedia tool when asked about facts, people, events, or concepts
-- For multi-step questions, break them down and use tools as needed
-- Cite Wikipedia as your source when providing facts
-- Be conversational and helpful
-- Remember context from the conversation to provide coherent responses
-"""
+from tools import create_tools
 
 
 class AgentState(TypedDict):
-    """
-    The state that flows through the graph.
-    
-    messages: List of conversation messages (accumulates over time)
-    """
-    messages: Annotated[list[BaseMessage], operator.add]
+    """State that flows through the LangGraph agent."""
+    messages: Annotated[List, operator.add]
 
 
-def create_agent(model_name: str = "gpt-4o-mini", temperature: float = 0.7):
+class ResearchAgent:
     """
-    Create and return a compiled LangGraph agent.
+    LangGraph-based research assistant agent.
     
-    Args:
-        model_name: The OpenAI model to use
-        temperature: Sampling temperature for the LLM
-        
-    Returns:
-        A compiled LangGraph agent with memory checkpointing
+    Features:
+    - Stateful conversation management
+    - Tool integration (RAG, Wikipedia, Calculator)
+    - Memory persistence across sessions
+    - LangSmith tracing integration
     """
-    llm = ChatOpenAI(model=model_name, temperature=temperature)
-    llm_with_tools = llm.bind_tools(ALL_TOOLS)
     
-    def call_model(state: AgentState) -> dict:
-        """The agent node - calls the LLM to decide next action."""
-        messages = state["messages"]
+    def __init__(self, rag_manager):
+        """
+        Initialize the research agent.
         
-        if not any(isinstance(m, SystemMessage) for m in messages):
-            messages = [SystemMessage(content=SYSTEM_PROMPT)] + messages
+        Args:
+            rag_manager: RAGManager instance for document operations
+        """
+        self.rag_manager = rag_manager
         
-        response = llm_with_tools.invoke(messages)
+        # LangSmith tracing configuration
+        self._setup_tracing()
+        
+        # Initialize LLM
+        self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+        
+        # Create tools
+        self.tools = create_tools(rag_manager)
+        self.llm_with_tools = self.llm.bind_tools(self.tools)
+        
+        # System prompt
+        self.system_prompt = self._create_system_prompt()
+        
+        # Build and compile the agent
+        self.agent_executor = self._build_agent()
+        
+        print(f"[AGENT] LangGraph agent initialized with {len(self.tools)} tools and memory")
+    
+    def _setup_tracing(self):
+        """Configure LangSmith tracing."""
+        os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
+        os.environ.setdefault("LANGCHAIN_PROJECT", "research-assistant")
+    
+    def _create_system_prompt(self) -> str:
+        """Create the system prompt for the agent."""
+        return """You are an intelligent research assistant with access to multiple information sources.
+
+Available tools:
+1. search_knowledge_base: Search uploaded documents for specific information
+2. search_wikipedia: Search Wikipedia for general knowledge
+3. calculate: Perform mathematical calculations  
+4. get_knowledge_base_info: See what documents are available
+
+Guidelines:
+- Always search the knowledge base FIRST for domain-specific questions
+- Use Wikipedia for general knowledge not in your documents
+- Cite your sources clearly
+- If asked about concepts, provide comprehensive explanations with examples
+- For complex questions, break them down and use multiple tools if needed
+
+Be helpful, accurate, and educational in your responses."""
+    
+    def _agent_node(self, state: AgentState):
+        """
+        Main agent node - calls the LLM with tools.
+        
+        Args:
+            state: Current agent state
+            
+        Returns:
+            Updated state with LLM response
+        """
+        messages = [SystemMessage(content=self.system_prompt)] + state["messages"]
+        response = self.llm_with_tools.invoke(messages)
         return {"messages": [response]}
     
-    def should_continue(state: AgentState) -> Literal["tools", "end"]:
+    def _should_continue(self, state: AgentState):
         """
-        Routing function to decide if we should call tools or end.
+        Decide whether to continue with tool calls or end.
         
+        Args:
+            state: Current agent state
+            
         Returns:
-            "tools" if the LLM wants to use a tool
-            "end" if the LLM is done and has a final response
+            "tools" to execute tools, "end" to finish
         """
         last_message = state["messages"][-1]
-        
         if hasattr(last_message, "tool_calls") and last_message.tool_calls:
             return "tools"
         return "end"
     
-    graph = StateGraph(AgentState)
-    
-    graph.add_node("agent", call_model)
-    graph.add_node("tools", ToolNode(ALL_TOOLS))
-    
-    graph.set_entry_point("agent")
-    
-    graph.add_conditional_edges(
-        "agent",
-        should_continue,
-        {
-            "tools": "tools",
-            "end": END
-        }
-    )
-    
-    graph.add_edge("tools", "agent")
-    
-    memory = MemorySaver()
-    agent = graph.compile(checkpointer=memory)
-    
-    return agent
-
-
-research_agent = create_agent()
-
-
-class ConversationManager:
-    """
-    Manages multiple conversation sessions with the research agent.
-    Each session maintains its own thread_id for memory persistence.
-    """
-    
-    def __init__(self):
-        self.agent = research_agent
-        self.sessions: dict[str, list[dict]] = {}
-    
-    def create_session(self) -> str:
-        """Create a new conversation session and return its ID."""
-        session_id = str(uuid.uuid4())
-        self.sessions[session_id] = []
-        return session_id
-    
-    @traceable(name="research_assistant_chat", metadata={"component": "conversation_manager"})
-    def chat(self, session_id: str, message: str) -> dict:
+    def _build_agent(self):
         """
-        Send a message in a conversation session.
+        Build and compile the LangGraph agent.
+        
+        Returns:
+            Compiled agent executor
+        """
+        # Create the graph
+        graph = StateGraph(AgentState)
+        
+        # Add nodes
+        graph.add_node("agent", self._agent_node)
+        graph.add_node("tools", ToolNode(self.tools))
+        
+        # Set entry point
+        graph.set_entry_point("agent")
+        
+        # Add edges
+        graph.add_conditional_edges(
+            "agent", 
+            self._should_continue, 
+            {"tools": "tools", "end": END}
+        )
+        graph.add_edge("tools", "agent")
+        
+        # Compile with memory
+        memory = MemorySaver()
+        return graph.compile(checkpointer=memory)
+    
+    def chat(self, message: str, session_id: str = "default") -> Dict[str, Any]:
+        """
+        Process a chat message through the agent.
         
         Args:
-            session_id: The session identifier
-            message: The user's message
+            message: User message
+            session_id: Session identifier for memory persistence
             
         Returns:
-            Dict with 'response' and 'tool_calls' used
-            
-        Note: This method is traced by LangSmith when LANGSMITH_TRACING=true
+            Dictionary with response and metadata
         """
-        if session_id not in self.sessions:
-            raise ValueError(f"Session {session_id} not found")
-        
-        config = {
-            "configurable": {"thread_id": session_id},
-            # Add metadata for LangSmith filtering
-            "metadata": {"session_id": session_id}
-        }
-        
-        result = self.agent.invoke(
-            {"messages": [HumanMessage(content=message)]},
-            config=config
-        )
-        
-        tool_calls_made = []
-        for msg in result["messages"]:
-            if hasattr(msg, "tool_calls") and msg.tool_calls:
-                for tc in msg.tool_calls:
-                    tool_calls_made.append({
-                        "name": tc["name"],
-                        "args": tc["args"]
-                    })
-        
-        final_response = result["messages"][-1].content
-        
-        self.sessions[session_id].append({
-            "role": "user",
-            "content": message
-        })
-        self.sessions[session_id].append({
-            "role": "assistant",
-            "content": final_response,
-            "tool_calls": tool_calls_made
-        })
-        
-        return {
-            "response": final_response,
-            "tool_calls": tool_calls_made
-        }
+        try:
+            # Invoke the agent
+            result = self.agent_executor.invoke(
+                {"messages": [HumanMessage(content=message)]},
+                {"configurable": {"thread_id": session_id}}
+            )
+            
+            # Extract the final response
+            final_message = result["messages"][-1]
+            response_text = final_message.content
+            
+            # Extract sources used from tool calls
+            sources_used = self._extract_sources(result["messages"])
+            
+            return {
+                "response": response_text,
+                "session_id": session_id,
+                "sources_used": sources_used
+            }
+            
+        except Exception as e:
+            raise Exception(f"Agent error: {str(e)}")
     
-    def get_history(self, session_id: str) -> list[dict]:
-        """Get the conversation history for a session."""
-        if session_id not in self.sessions:
-            raise ValueError(f"Session {session_id} not found")
-        return self.sessions[session_id]
-    
-    def delete_session(self, session_id: str) -> bool:
-        """Delete a conversation session."""
-        if session_id in self.sessions:
-            del self.sessions[session_id]
-            return True
-        return False
-
-
-conversation_manager = ConversationManager()
-
-
-if __name__ == "__main__":
-    from dotenv import load_dotenv
-    load_dotenv()
-    
-    session_id = conversation_manager.create_session()
-    print(f"Created session: {session_id}\n")
-    
-    questions = [
-        "Who invented Python programming language?",
-        "When was he born and where?",
-        "What's 2024 minus his birth year?"
-    ]
-    
-    for q in questions:
-        print(f"User: {q}")
-        result = conversation_manager.chat(session_id, q)
-        print(f"Assistant: {result['response']}")
-        if result['tool_calls']:
-            print(f"  [Tools used: {[tc['name'] for tc in result['tool_calls']]}]")
-        print()
+    def _extract_sources(self, messages: List) -> List[str]:
+        """
+        Extract sources used from tool calls in the conversation.
+        
+        Args:
+            messages: List of messages from the conversation
+            
+        Returns:
+            List of source names
+        """
+        sources_used = []
+        
+        for message in messages:
+            if hasattr(message, "tool_calls") and message.tool_calls:
+                for tool_call in message.tool_calls:
+                    tool_name = tool_call["name"]
+                    if tool_name == "search_knowledge_base":
+                        sources_used.append("Knowledge Base")
+                    elif tool_name == "search_wikipedia":
+                        sources_used.append("Wikipedia")
+                    elif tool_name == "calculate":
+                        sources_used.append("Calculator")
+                    elif tool_name == "get_knowledge_base_info":
+                        sources_used.append("Knowledge Base Info")
+        
+        # Remove duplicates while preserving order
+        return list(dict.fromkeys(sources_used))

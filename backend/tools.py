@@ -1,96 +1,72 @@
 """
-Custom tools for the Research Assistant Agent.
+Research Assistant Tools
 
-Uses Wikipedia for real information search.
-SSL certificates are configured via system environment variables.
+This module contains all the tools available to the LangGraph agent.
+Each tool is a function the AI can call to perform specific tasks.
 """
-import os
-from datetime import datetime
 from langchain_core.tools import tool
 import wikipedia
 
-# Configure Wikipedia with a proper user agent
-wikipedia.set_user_agent('ResearchAssistant/1.0 (Learning LangChain/LangGraph)')
 
-print("[OK] Wikipedia search configured")
-
-
-@tool
-def search_wikipedia(query: str) -> str:
+def create_tools(rag_manager):
     """
-    Search Wikipedia for information about any topic.
-    Use this for facts about people, places, events, technology, science, history, etc.
+    Create and return all tools for the research assistant.
+    
+    Args:
+        rag_manager: Instance of RAGManager for document operations
+        
+    Returns:
+        List of LangChain tools
     """
-    try:
-        # Search and get summary
-        summary = wikipedia.summary(query, sentences=5)
-        return f"Wikipedia Summary for '{query}':\n\n{summary}"
-    except wikipedia.exceptions.DisambiguationError as e:
-        options = ", ".join(e.options[:5])
-        return f"The query '{query}' is ambiguous. Did you mean one of: {options}?"
-    except wikipedia.exceptions.PageError:
-        return f"No Wikipedia page found for '{query}'. Try a different search term."
-    except Exception as e:
-        return f"Error searching Wikipedia: {str(e)}"
+    
+    @tool
+    def search_knowledge_base(query: str) -> str:
+        """Search the uploaded documents for relevant information."""
+        results = rag_manager.search(query)
+        
+        if not results:
+            return "No relevant information found in the knowledge base."
+        
+        context_parts = []
+        for i, doc in enumerate(results, 1):
+            filename = doc.metadata.get('original_filename', 'Unknown')
+            content = doc.page_content.strip()
+            context_parts.append(f"[Document {i}: {filename}]\n{content}")
+        
+        return "\n\n".join(context_parts)
 
+    @tool  
+    def search_wikipedia(query: str) -> str:
+        """Search Wikipedia for general information."""
+        try:
+            return wikipedia.summary(query, sentences=3)
+        except Exception as e:
+            return f"Wikipedia search failed: {str(e)}"
 
-@tool
-def get_wikipedia_page(title: str) -> str:
-    """
-    Get detailed content from a specific Wikipedia page.
-    Use this when you need more information than the summary provides.
-    """
-    try:
-        page = wikipedia.page(title)
-        content = page.content[:3000]
-        return f"Wikipedia Page: {page.title}\n\nURL: {page.url}\n\nContent:\n{content}..."
-    except wikipedia.exceptions.DisambiguationError as e:
-        options = ", ".join(e.options[:5])
-        return f"The title '{title}' is ambiguous. Options: {options}"
-    except wikipedia.exceptions.PageError:
-        return f"No Wikipedia page found with title '{title}'."
-    except Exception as e:
-        return f"Error fetching page: {str(e)}"
+    @tool
+    def calculate(expression: str) -> str:
+        """Perform mathematical calculations."""
+        try:
+            # Simple eval for demo - in production use safer math parser
+            result = eval(expression)
+            return f"{expression} = {result}"
+        except Exception as e:
+            return f"Calculation error: {str(e)}"
 
-
-@tool
-def calculate(expression: str) -> str:
-    """
-    Evaluate a mathematical expression and return the result.
-    Examples: '2 + 2', '100 * 0.15', '2024 - 1956', 'pow(2, 10)'
-    """
-    allowed_names = {
-        "abs": abs, "round": round, "min": min, "max": max,
-        "sum": sum, "pow": pow, "len": len
-    }
-    try:
-        result = eval(expression, {"__builtins__": {}}, allowed_names)
-        return f"Result: {expression} = {result}"
-    except Exception as e:
-        return f"Error evaluating '{expression}': {str(e)}"
-
-
-@tool
-def get_current_time() -> str:
-    """
-    Get the current date and time.
-    Use this when the user asks about the current time or date.
-    """
-    now = datetime.now()
-    return f"Current time: {now.strftime('%Y-%m-%d %H:%M:%S')} ({now.strftime('%A')})"
-
-
-@tool
-def word_count(text: str) -> str:
-    """
-    Count the number of words and characters in a text.
-    """
-    words = len(text.split())
-    chars = len(text)
-    return f"Text statistics: {words} words, {chars} characters"
-
-
-# All tools available to the agent
-ALL_TOOLS = [search_wikipedia, get_wikipedia_page, calculate, get_current_time, word_count]
-
-print(f"[OK] Loaded {len(ALL_TOOLS)} tools: {', '.join(t.name for t in ALL_TOOLS)}")
+    @tool
+    def get_knowledge_base_info() -> str:
+        """Get information about the current knowledge base."""
+        info = rag_manager.get_info()
+        if info["total_documents"] == 0:
+            return "Knowledge base is empty. Upload documents to get started."
+        
+        summary = f"Knowledge Base:\n"
+        summary += f"- {info['total_documents']} documents\n"
+        summary += f"- {info['total_chunks']} searchable chunks\n\n"
+        
+        for doc_id, doc_info in info["documents"].items():
+            summary += f"- {doc_info['filename']}: {doc_info['chunks']} chunks\n"
+        
+        return summary
+    
+    return [search_knowledge_base, search_wikipedia, calculate, get_knowledge_base_info]
