@@ -4,8 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { 
   ChatMessage as ChatMessageType, 
   createSession, 
-  sendMessage, 
-  sendRAGMessage,
+  sendMessage,
   checkHealth,
   getHealthStatus,
   getKnowledgeBase,
@@ -24,8 +23,7 @@ export default function Chat() {
   const [isConnected, setIsConnected] = useState(false);
   const [isDocManagerOpen, setIsDocManagerOpen] = useState(false);
   const [knowledgeBase, setKnowledgeBase] = useState<KnowledgeBaseInfo | null>(null);
-  const [useRAG, setUseRAG] = useState(true); // Toggle between RAG and basic mode
-  const [ragAvailable, setRagAvailable] = useState(false); // Server RAG capability
+  // Removed RAG toggle - server automatically uses RAG when documents are available
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
   const scrollToBottom = () => {
@@ -53,18 +51,13 @@ export default function Chat() {
       
       if (healthy) {
         try {
-          // Check RAG availability
-          const healthStatus = await getHealthStatus();
-          setRagAvailable(healthStatus.rag_available || false);
-          
           const id = await createSession();
           setSessionId(id);
           
-          if (healthStatus.rag_available) {
-            await loadKnowledgeBase();
-          }
+          // Always try to load knowledge base - server handles RAG automatically
+          await loadKnowledgeBase();
         } catch {
-          setError('Failed to create session. Please refresh the page.');
+          console.log('Session created, knowledge base may be empty');
         }
       }
     };
@@ -82,30 +75,18 @@ export default function Chat() {
     try {
       let response;
       
-      if (useRAG && ragAvailable) {
-        // Use RAG-enhanced messaging (with automatic fallback)
-        response = await sendRAGMessage(sessionId, message);
-        setMessages(prev => [
-          ...prev,
-          {
-            role: 'assistant',
-            content: response.response,
-            tool_calls: response.tool_calls,
-            sources_used: response.sources_used,
-          },
-        ]);
-      } else {
-        // Use basic messaging
-        response = await sendMessage(sessionId, message);
-        setMessages(prev => [
-          ...prev,
-          {
-            role: 'assistant',
-            content: response.response,
-            tool_calls: response.tool_calls,
-          },
-        ]);
-      }
+      // Both RAG and basic messaging now use the same unified endpoint
+      // The server automatically decides whether to use RAG based on available documents
+      response = await sendMessage(sessionId, message);
+      setMessages(prev => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: response.response,
+          tool_calls: response.tool_calls,
+          sources_used: response.sources_used,
+        },
+      ]);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to send message';
       setError(errorMessage);
@@ -167,13 +148,9 @@ export default function Chat() {
           <div>
             <h1 className="text-lg font-semibold text-white">Research Assistant</h1>
             <p className="text-xs text-gray-400">
-              {ragAvailable ? (
-                useRAG && knowledgeBase && knowledgeBase.total_documents > 0 
-                  ? `RAG Mode • ${knowledgeBase.total_documents} docs • ${knowledgeBase.total_chunks} chunks`
-                  : `RAG Available • ${knowledgeBase?.total_documents || 0} docs`
-              ) : (
-                'Basic Mode • Wikipedia + Calculator'
-              )}
+              {knowledgeBase && knowledgeBase.total_documents > 0 
+                ? `${knowledgeBase.total_documents} docs • ${knowledgeBase.total_chunks} chunks`
+                : 'Wikipedia + Calculator + Document Upload'}
             </p>
           </div>
         </div>
@@ -182,13 +159,8 @@ export default function Chat() {
           {/* Document Manager Button */}
           <button
             onClick={() => setIsDocManagerOpen(true)}
-            className={`px-3 py-2 text-sm rounded-lg transition-colors flex items-center gap-2 ${
-              ragAvailable 
-                ? 'bg-purple-600 hover:bg-purple-700 text-white'
-                : 'bg-gray-600 text-gray-400 cursor-not-allowed'
-            }`}
-            title={ragAvailable ? "Manage Documents" : "RAG not available on server"}
-            disabled={!ragAvailable}
+            className="px-3 py-2 text-sm rounded-lg transition-colors flex items-center gap-2 bg-purple-600 hover:bg-purple-700 text-white"
+            title="Manage Documents"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -200,34 +172,6 @@ export default function Chat() {
             )}
           </button>
           
-          {/* Mode Toggle */}
-          <button
-            onClick={() => setUseRAG(!useRAG)}
-            className={`px-3 py-2 text-sm rounded-lg transition-colors flex items-center gap-2 ${
-              useRAG 
-                ? 'bg-green-600 hover:bg-green-700 text-white' 
-                : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
-            }`}
-            title={ragAvailable ? (useRAG ? 'RAG Mode Active' : 'Basic Mode Active') : 'RAG not available on server'}
-            disabled={!ragAvailable}
-          >
-            {useRAG ? (
-              <>
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                RAG
-              </>
-            ) : (
-              <>
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
-                Basic
-              </>
-            )}
-          </button>
           
           {/* New Chat Button */}
           <button
@@ -252,7 +196,7 @@ export default function Chat() {
             </div>
             <h2 className="text-2xl font-bold text-white mb-2">Welcome to Research Assistant</h2>
             <p className="text-gray-400 max-w-md mb-4">
-              {useRAG && knowledgeBase && knowledgeBase.total_documents > 0 ? (
+              {knowledgeBase && knowledgeBase.total_documents > 0 ? (
                 <>
                   I can search your uploaded documents, Wikipedia, and perform calculations. 
                   I have access to <strong className="text-white">{knowledgeBase.total_documents} documents</strong> with <strong className="text-white">{knowledgeBase.total_chunks} searchable chunks</strong>.
@@ -260,13 +204,13 @@ export default function Chat() {
               ) : (
                 <>
                   I can search Wikipedia for information, remember our conversation context, and help you with multi-step research questions.
-                  <strong className="text-yellow-400"> Upload documents to enable RAG mode!</strong>
+                  <strong className="text-yellow-400"> Upload documents to enable document search!</strong>
                 </>
               )}
             </p>
             
             {/* Quick upload hint */}
-            {ragAvailable && (!knowledgeBase || knowledgeBase.total_documents === 0) && (
+            {(!knowledgeBase || knowledgeBase.total_documents === 0) && (
               <div className="mb-6 p-3 bg-purple-500/10 border border-purple-500/20 rounded-lg">
                 <div className="flex items-center gap-2 text-sm text-purple-300">
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -277,19 +221,8 @@ export default function Chat() {
               </div>
             )}
             
-            {!ragAvailable && (
-              <div className="mb-6 p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
-                <div className="flex items-center gap-2 text-sm text-yellow-300">
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                  </svg>
-                  RAG features not available. Start server with: python backend/server_with_rag.py
-                </div>
-              </div>
-            )}
-            
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-w-lg">
-              {(ragAvailable && useRAG && knowledgeBase && knowledgeBase.total_documents > 0 ? [
+              {(knowledgeBase && knowledgeBase.total_documents > 0 ? [
                 "What information do you have in your knowledge base?",
                 "Summarize the key concepts from my documents",
                 "Search my documents for specific information",

@@ -15,6 +15,7 @@ export interface ChatMessage {
 export interface ChatResponse {
   response: string;
   tool_calls: ToolCall[];
+  sources_used?: string[];
 }
 
 export interface SessionResponse {
@@ -47,9 +48,7 @@ export interface DocumentUploadResponse {
   status: string;
 }
 
-export interface RAGChatResponse extends ChatResponse {
-  sources_used?: string[];
-}
+// Removed RAGChatResponse - now ChatResponse includes sources_used
 
 // RAG API functions
 export async function uploadDocument(file: File): Promise<DocumentUploadResponse> {
@@ -99,9 +98,18 @@ export async function searchKnowledgeBase(query: string, limit: number = 4) {
   return response.json();
 }
 
-// Enhanced chat function for RAG with fallback
-export async function sendRAGMessage(sessionId: string, message: string): Promise<RAGChatResponse> {
-  // Use unified chat endpoint
+// Note: sendRAGMessage is now unified with sendMessage since the server 
+// automatically handles RAG when documents are available
+
+export async function createSession(): Promise<string> {
+  // With the new unified server, we don't need to create sessions
+  // We just generate a client-side session ID
+  const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  return sessionId;
+}
+
+export async function sendMessage(sessionId: string, message: string): Promise<ChatResponse> {
+  // Use the new unified chat endpoint
   const response = await fetch(`${API_BASE}/chat`, {
     method: 'POST',
     headers: {
@@ -112,71 +120,24 @@ export async function sendRAGMessage(sessionId: string, message: string): Promis
       session_id: sessionId 
     }),
   });
-
+  
   if (!response.ok) {
     const error = await response.json();
     throw new Error(error.detail || 'Failed to send message');
   }
-
+  
   const chatResponse = await response.json();
   
+  // Convert to expected format
   return {
     response: chatResponse.response,
-    tool_calls: [], // Unified server doesn't expose internal tool calls
+    tool_calls: [], // New server doesn't expose tool calls in this format
     sources_used: chatResponse.sources_used || []
   };
 }
 
-export async function createSession(): Promise<string> {
-  const response = await fetch(`${API_BASE}/sessions`, {
-    method: 'POST',
-  });
-  
-  if (!response.ok) {
-    throw new Error('Failed to create session');
-  }
-  
-  const data: SessionResponse = await response.json();
-  return data.session_id;
-}
-
-export async function sendMessage(sessionId: string, message: string): Promise<ChatResponse> {
-  const response = await fetch(`${API_BASE}/sessions/${sessionId}/chat`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ message }),
-  });
-  
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.detail || 'Failed to send message');
-  }
-  
-  return response.json();
-}
-
-export async function getHistory(sessionId: string): Promise<ChatMessage[]> {
-  const response = await fetch(`${API_BASE}/sessions/${sessionId}/history`);
-  
-  if (!response.ok) {
-    throw new Error('Failed to get history');
-  }
-  
-  const data: HistoryResponse = await response.json();
-  return data.messages;
-}
-
-export async function deleteSession(sessionId: string): Promise<void> {
-  const response = await fetch(`${API_BASE}/sessions/${sessionId}`, {
-    method: 'DELETE',
-  });
-  
-  if (!response.ok) {
-    throw new Error('Failed to delete session');
-  }
-}
+// Note: The new unified server handles session management automatically
+// History and session deletion are managed internally by LangGraph
 
 export interface HealthStatus {
   status: string;
